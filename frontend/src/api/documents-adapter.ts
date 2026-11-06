@@ -11,6 +11,7 @@ import type {
   ParentNoteDetail,
   ParentNoteList,
   PublicationResult,
+  SelectableMedia,
   Sentence,
 } from "@/types/api-draft/documents";
 import type { MediaUrl } from "@/types/api-draft/media";
@@ -32,6 +33,7 @@ import type {
   PublicationResultView,
   PublicationStatusView,
   RosterStatusView,
+  SelectableMediaView,
   SentenceView,
 } from "./documents-view";
 
@@ -213,14 +215,31 @@ export function toParentMediaDownloadView(raw: ParentMediaDownload): ParentMedia
   return { media_id: raw.media_id, url: raw.url, filename: raw.filename };
 }
 
+export function toSelectableMediaView(raw: SelectableMedia): SelectableMediaView {
+  return {
+    media_id: raw.media_id,
+    // 학부모에게 보내는 것과 같은 종류입니다(테크스펙 D-4). 값이 늘면 여기서 컴파일 에러가 납니다.
+    type: toParentMediaTypeView(raw.type),
+    url: raw.url,
+    url_expires_at: raw.url_expires_at,
+    captured_at: raw.captured_at,
+  };
+}
+
+/** 교사가 알림장에 고를 수 있는 미디어인지. 모르는 종류는 잠급니다(H-1). */
+export function canSelectMedia(media: SelectableMediaView): boolean {
+  return media.type !== "unknown";
+}
+
 /** 학부모가 저장할 수 있는 미디어인지. 모르는 종류는 잠급니다. */
 export function canSaveParentMedia(item: ParentMediaItemView): boolean {
   return item.type !== "unknown";
 }
 
 /**
- * **교사가 고른 사진**입니다. 게시 여부와 무관하고, 게시 전 초안을 다루는 초안 검토
- * 화면이 씁니다. 사진이 아닌 선택 미디어(영상·음성메모)는 뺍니다.
+ * **교사가 고른 사진·영상**입니다. 게시 여부와 무관하고, 게시 전 초안을 다루는 초안 검토
+ * 화면이 씁니다. 음성메모는 학부모에게 보내지 않아 뺍니다(테크스펙 D-4). 이름은 서버의
+ * `photos`처럼 영상까지 담는 뜻으로 그대로 씁니다 — 화면은 `type`을 보고 그립니다.
  *
  * 필드가 아니라 함수로 두는 것은 `media`와 `selected_media_ids`에서 계산되는 값이라
  * 서버 응답에 없는 필드를 adapter가 만들어 내지 않게 하려는 것입니다(#107 리뷰 송유진 님).
@@ -229,11 +248,11 @@ export function selectedPhotos(draft: DraftView | undefined): DraftMediaView[] {
   if (draft === undefined) return [];
   return draft.selected_media_ids
     .map((id) => draft.media.find((media) => media.media_id === id))
-    .filter((media): media is DraftMediaView => media !== undefined && media.type === "photo");
+    .filter((media): media is DraftMediaView => media !== undefined && media.type !== "voice_memo");
 }
 
 /**
- * **학부모에게 실제로 나간 사진**입니다. 알림장 상세처럼 게시본을 되짚어 보는 화면이 씁니다.
+ * **학부모에게 실제로 나간 사진·영상**입니다. 알림장 상세처럼 게시본을 되짚어 보는 화면이 씁니다.
  * `true`일 때만 돌려줍니다 — `null`(게시 전 캐시가 남은 경우)에 보여 주면 사진을 빼고
  * 게시했는데도 교사에게는 사진이 보입니다(#89 리뷰).
  */

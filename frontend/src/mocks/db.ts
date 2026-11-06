@@ -239,20 +239,24 @@ export function seedDb(now: Date = new Date()): MockDb {
   const book2 = seedMedia(52, 2, at(twoDaysAgo, "03:10:00"), [face(4, 0.87)]);
   const book3 = seedMedia(61, 2, at(threeDaysAgo, "02:30:00"), [face(1, 0.91)]);
   const media = [blocks, sand, book, sand2, book2, book3];
+  // 깔아 두는 알림장은 교사가 근거 사진을 이미 고른 것으로 둡니다. 게시본과 승인본을 그대로 보여 주려는
+  // 것입니다. 아직 검토 중인 김도윤 초안만 아래에서 AI 초안처럼 비웁니다.
   const drafts = (
     child: number,
     date: string,
     evidence: MediaRecord[],
     obs: number,
     note: number,
-  ) =>
-    buildDrafts({
+  ): [DraftRecord, DraftRecord] => {
+    const [log, parentNote] = buildDrafts({
       child: childOf(child),
       recordDate: date,
       evidenceMedia: evidence,
       draftIds: { observation_log: fixtureId("draft", obs), parent_note: fixtureId("draft", note) },
       now: at(date, "06:40:00"),
     });
+    return [log, { ...parentNote, selected_media_ids: evidence.map((media) => media.media_id) }];
+  };
 
   // 상태를 옮긴 초안: approve는 version+1, 게시도 version+1(API 문서 규칙)
   const approve = (draft: DraftRecord, date: string): DraftRecord => ({
@@ -282,7 +286,7 @@ export function seedDb(now: Date = new Date()): MockDb {
   // 어제 = 검토 중(초안 검토 화면 확인용), 그제·사흘 전 = 게시를 마친 날.
   const allDrafts: DraftRecord[] = [
     doyunLog,
-    doyunNote,
+    { ...doyunNote, selected_media_ids: [] },
     hajunLog,
     approve(hajunNote, yesterday),
     approve(jiwooLog, yesterday),
