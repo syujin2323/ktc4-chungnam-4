@@ -37,6 +37,7 @@ import { cn } from "@/lib/utils";
 import { EvidencePanel } from "./components/EvidencePanel";
 import { PublishConfirmDialog } from "./components/PublishConfirmDialog";
 import { RosterList, type RosterRow } from "./components/RosterList";
+import { MediaPickerDialog } from "./components/MediaPickerDialog";
 
 /**
  * 게시가 건별로 실패한 사유입니다. 서버는 코드만 주므로 교사가 읽을 말로 바꿉니다.
@@ -75,20 +76,26 @@ function isVersionConflict(error: unknown) {
 const EDIT_FIELD_CLASS =
   "min-h-0 resize-none rounded-md border-0 bg-transparent p-0 text-lead whitespace-pre-line shadow-none focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent";
 
-// TODO(김진하): 사진 추가는 업로드 흐름(media, 정은·김동건)이 정해지지 않아 자리만 둡니다.
-// Figma 타일은 '사진 추가'뿐이지만 '준비 중'을 보이는 글자로도 둡니다. 스크린리더에만 읽히면 화면을 보는
-// 교사는 왜 눌리지 않는지 모릅니다(10/30 배포 점검 25번).
-function AddPhotoTile() {
+interface AddPhotoTileProps {
+  disabled: boolean;
+  /** 지금 고를 수 없는 이유. 고를 수 있으면 `null`입니다. */
+  lockedReason: string | null;
+  onClick: () => void;
+}
+
+// 눌리지 않는 이유는 보이는 글자로 둡니다. 스크린리더에만 읽히면 화면을 보는 교사는 왜 눌리지 않는지
+// 모릅니다(10/30 배포 점검 25번).
+function AddPhotoTile({ disabled, lockedReason, onClick }: AddPhotoTileProps) {
   return (
     <button
       type="button"
-      disabled
-      aria-label="사진 추가 (준비 중)"
-      className="flex aspect-square flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line text-ink-muted disabled:opacity-60"
+      disabled={disabled}
+      onClick={onClick}
+      className="flex aspect-square flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line p-3 text-ink-muted outline-none transition-colors hover:bg-tint-2 focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-60 disabled:hover:bg-transparent"
     >
       <Plus className="size-6" />
       <span className="text-label">사진 추가</span>
-      <span className="text-caption">준비 중</span>
+      {lockedReason ? <span className="text-center text-caption">{lockedReason}</span> : null}
     </button>
   );
 }
@@ -146,6 +153,11 @@ export function DraftReviewPage() {
   const [addedTexts, setAddedTexts] = useState<string[]>([]);
   /** 고친 문장을 비운 채 "수정 완료"를 누르면 저장하지 않고 이 안내를 보여 줍니다. */
   const [emptyEdit, setEmptyEdit] = useState(false);
+  /**
+   * 사진 고르기 대화상자를 열 때 본 초안 version. `null`이면 닫혀 있습니다. 문장 수정과 같은 이유로
+   * 저장은 이 version으로 합니다 — 열어 둔 사이 다른 곳에서 고른 사진을 조용히 덮어쓰지 않습니다.
+   */
+  const [mediaPickerVersion, setMediaPickerVersion] = useState<number | null>(null);
   /** 초안이 없는 원아에게 교사가 직접 쓰는 글 */
   const [newText, setNewText] = useState("");
   const [publishOpen, setPublishOpen] = useState(false);
@@ -185,6 +197,7 @@ export function DraftReviewPage() {
     setNewText("");
     // 빈 문장 안내도 그 원아의 편집에 딸린 것이라, 다른 원아로 넘어가면 지웁니다(#206 멘토님 리뷰).
     setEmptyEdit(false);
+    setMediaPickerVersion(null);
   }
 
   // 고치던 문장과 새 문장을 저장하지 않고 버립니다. 같은 원아를 다시 눌러 버리던 길은 실수로
@@ -304,6 +317,29 @@ export function DraftReviewPage() {
     },
   });
 
+  // 알림장에 보낼 사진·영상 고르기(FR-10, 테크스펙 D-4). 문장 수정과 같은 PATCH입니다. 버전이 오르면
+  // 확인 체크가 풀려서(shownVersion), 고친 사진을 보지 않고 승인하는 길은 생기지 않습니다(H-1).
+  const selectMediaMutation = useMutation({
+    mutationFn: (input: { draftId: string; version: number; mediaIds: string[] }) =>
+      patchDraft(input.draftId, {
+        expected_version: input.version,
+        selected_media_ids: input.mediaIds,
+      }),
+    onSuccess: async (updated, variables) => {
+      queryClient.setQueryData(documentsKeys.draft(updated.draft_id), updated);
+      if (variables.draftId === draftId) setMediaPickerVersion(null);
+      await queryClient.invalidateQueries({
+        queryKey: documentsKeys.classDraftLists(classId),
+      });
+    },
+    onError: async (error, variables) => {
+      // 문장 수정과 같습니다. 다른 곳에서 바꿨으면 대화상자를 닫고 새 사진을 보여 줍니다. 실패 문구는
+      // 남겨 왜 닫혔는지 알립니다. 그 밖의 실패는 고른 것을 잃지 않게 열어 두고 다시 누르게 합니다.
+      if (isVersionConflict(error) && variables.draftId === draftId) setMediaPickerVersion(null);
+      await refetchOnVersionConflict(error, variables.draftId);
+    },
+  });
+
   // 승인은 잠금이지만, 게시 전까지는 교사가 되돌려 다시 고칠 수 있어야 합니다.
   const reopenMutation = useMutation({
     mutationFn: (input: { draftId: string; version: number }) =>
@@ -380,7 +416,12 @@ export function DraftReviewPage() {
     createVariables?.childId === selectedChildId && createVariables.recordDate === recordDate
       ? createMutation.error
       : null;
-  const draftError = errorOnShownDraft(patchMutation) ?? errorOnShownDraft(reopenMutation);
+  // 대화상자가 열려 있으면 그 안에서 알리고, 충돌로 닫혔으면 본문 아래에 남깁니다.
+  const mediaSaveError = errorOnShownDraft(selectMediaMutation);
+  const draftError =
+    errorOnShownDraft(patchMutation) ??
+    errorOnShownDraft(reopenMutation) ??
+    (mediaPickerVersion === null ? mediaSaveError : null);
   const publishError =
     publishMutation.variables?.recordDate === recordDate ? publishMutation.error : null;
   // HTTP 200 안에 섞여 오는 건별 실패도 같은 기준으로 그 날짜에서만 보여 줍니다.
@@ -411,9 +452,10 @@ export function DraftReviewPage() {
   const nameOf = (id: string | null) => children.find((child) => child.child_id === id)?.name ?? "";
   const selectedSentence =
     draft?.sentences.find((sentence) => sentence.sentence_id === selectedSentenceId) ?? null;
-  // 게시 전 초안이라 교사가 고른 사진을 그대로 보여 줍니다. 게시본을 되짚어 보는 화면은
-  // adapter의 sentPhotos를 써서 실제로 나간 사진만 봅니다.
+  // 게시 전 초안이라 교사가 고른 사진·영상을 그대로 보여 줍니다. 게시본을 되짚어 보는 화면은
+  // adapter의 sentPhotos를 써서 실제로 나간 것만 봅니다.
   const photos = selectedPhotos(draft);
+  const selectedVideoCount = photos.filter((photo) => photo.type === "video").length;
   // 제목의 장수와 실제로 그리는 장수가 어긋나지 않게, 그릴 사진을 먼저 걸러 그 길이로 셉니다.
   // `failed_media_ids`에 있어도 `media`에 없는 id는 그릴 수 없습니다.
   const failedPhotos =
@@ -427,6 +469,15 @@ export function DraftReviewPage() {
   const canApproveNow = isDraftApprovable && !isEditing;
   // 게시한 뒤에는 되돌릴 수 없습니다. 이미 학부모에게 나갔으므로 회수가 따로 필요합니다(H-1).
   const canReopenNow = canReopen(draft);
+  // 서버는 검토 대기(verified)인 초안의 사진만 바꿀 수 있게 합니다(`PATCH`의 409). 문장을 고치는 중에도
+  // 잠급니다 — 사진을 저장하면 버전이 올라 고치던 문장이 충돌로 사라집니다.
+  const addPhotoLockedReason = !isDraftApprovable
+    ? canReopenNow
+      ? "다시 검토하기를 누르면 고를 수 있어요"
+      : "지금은 사진을 바꿀 수 없어요"
+    : isEditing
+      ? "수정을 마치면 고를 수 있어요"
+      : null;
   // 게시는 반 전체를 하루 한 번 합니다 — 임시 결정(김진하), docs/api/documents.md §POST /publications.
   // 그래서 한 날짜에 게시된 초안이 하나라도 있으면 그날은 끝난 날입니다. 게시본은 학부모가
   // 이미 봤으므로 고칠 수 없고, 되돌리려면 회수(revoke)가 필요합니다(H-1).
@@ -513,6 +564,38 @@ export function DraftReviewPage() {
     });
   }
 
+  function openMediaPicker() {
+    if (!draft) return;
+    // 지난번 실패 문구를 새 대화상자에 남기지 않습니다.
+    selectMediaMutation.reset();
+    setMediaPickerVersion(draft.version);
+  }
+
+  function closeMediaPicker() {
+    // 저장을 기다리는 동안에는 닫지 않습니다. 결과에 따라 닫거나 실패를 보여 줍니다.
+    if (selectMediaMutation.isPending) return;
+    // 교사가 스스로 닫았으니 이 대화상자의 실패 문구도 지웁니다(수정 취소와 같음).
+    selectMediaMutation.reset();
+    setMediaPickerVersion(null);
+  }
+
+  function saveSelectedMedia(mediaIds: string[]) {
+    if (!draft || mediaPickerVersion === null) return;
+    // 문장 수정과 같습니다. 바뀐 것이 없으면 저장하지 않습니다 — 버전만 올라 확인 체크가 풀립니다.
+    const isUnchanged =
+      mediaIds.length === draft.selected_media_ids.length &&
+      mediaIds.every((id, at) => id === draft.selected_media_ids[at]);
+    if (isUnchanged) {
+      setMediaPickerVersion(null);
+      return;
+    }
+    selectMediaMutation.mutate({
+      draftId: draft.draft_id,
+      version: mediaPickerVersion,
+      mediaIds,
+    });
+  }
+
   // 게시를 마친 날짜는 다시 열어도 고칠 수 없습니다. 검토 화면을 그대로 보여 주면
   // 교사가 고칠 수 있다고 착각하므로, 화면 전체를 끝난 상태로 바꿉니다.
   if (isDayClosed) {
@@ -572,13 +655,10 @@ export function DraftReviewPage() {
           ) : draft === undefined ? (
             <div className="flex flex-col gap-5 rounded-xl bg-paper p-7">
               {/* TODO(김진하): 빈 상태 문구와 디자인이 Figma에 없어 임시로 둡니다.
-                  '사진 추가'는 아직 꺼져 있어 문구에서 뺐습니다. 사진 고르기가 정해지면 다시 넣습니다. */}
+                  사진은 초안에 붙어서, 초안이 없는 지금은 고르지 못합니다(PATCH /drafts/{draft_id}). */}
               <p className="text-body text-ink-muted">
-                아직 이 아이의 기록이 없어요. 직접 작성할 수 있어요.
+                아직 이 아이의 기록이 없어요. 직접 작성해 저장하면 사진도 고를 수 있어요.
               </p>
-              <div className="grid grid-cols-3 gap-4">
-                <AddPhotoTile />
-              </div>
               <Textarea
                 value={newText}
                 rows={4}
@@ -627,17 +707,41 @@ export function DraftReviewPage() {
               ) : null}
               {/* 사진이 없는 초안(직접 쓴 글)에서도 추가 자리는 남겨 둡니다. */}
               <div className="grid grid-cols-3 gap-4">
-                {photos.map((photo) => (
-                  <img
-                    key={photo.media_id}
-                    src={photo.url}
-                    alt=""
-                    className="aspect-square w-full rounded-lg object-cover"
-                  />
-                ))}
-                <AddPhotoTile />
+                {photos.map((photo) =>
+                  photo.type === "video" ? (
+                    <video
+                      key={photo.media_id}
+                      src={photo.url}
+                      controls
+                      playsInline
+                      preload="metadata"
+                      aria-label="알림장에 고른 영상"
+                      className="aspect-square w-full rounded-lg bg-neutral-soft object-cover"
+                    />
+                  ) : (
+                    <img
+                      key={photo.media_id}
+                      src={photo.url}
+                      alt=""
+                      className="aspect-square w-full rounded-lg object-cover"
+                    />
+                  ),
+                )}
+                <AddPhotoTile
+                  // 승인을 기다리는 사이 열면, 승인된 초안에 대화상자만 남습니다(직접 수정과 같음).
+                  disabled={
+                    addPhotoLockedReason !== null ||
+                    patchMutation.isPending ||
+                    approveMutation.isPending
+                  }
+                  lockedReason={addPhotoLockedReason}
+                  onClick={openMediaPicker}
+                />
               </div>
-              <p className="text-caption text-ink-muted">선택 사진 {photos.length}장</p>
+              <p className="text-caption text-ink-muted">
+                선택 사진 {photos.length - selectedVideoCount}장
+                {selectedVideoCount > 0 ? ` · 영상 ${String(selectedVideoCount)}개` : ""}
+              </p>
 
               <div className="flex flex-col gap-3.5 rounded-xl bg-paper p-7">
                 <div className="flex items-center justify-between">
@@ -871,6 +975,16 @@ export function DraftReviewPage() {
           setPublishOutcome(null);
           publishMutation.mutate({ items: publishable, includePhotos, recordDate });
         }}
+      />
+
+      <MediaPickerDialog
+        open={mediaPickerVersion !== null}
+        onClose={closeMediaPicker}
+        draftId={draftId}
+        selectedMediaIds={draft?.selected_media_ids ?? []}
+        isSaving={selectMediaMutation.isPending}
+        saveError={mediaSaveError ? failureText(mediaSaveError) : null}
+        onSave={saveSelectedMedia}
       />
     </>
   );

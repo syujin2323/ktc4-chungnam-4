@@ -148,21 +148,21 @@ describe("DraftReviewPage", () => {
     ).toBeInTheDocument();
   });
 
-  // '사진 추가'가 꺼져 있는데 빈 상태 문구가 사진을 추가하라고 안내했습니다(10/30 배포 점검 25번).
-  it("자료 없는 원아의 빈 상태는 꺼진 사진 추가를 안내하지 않는다", async () => {
+  // 사진은 초안에 붙습니다. 초안이 없을 때는 고를 수 없어 타일 없이 먼저 쓰게 안내합니다(10/30 배포 점검 25번).
+  it("자료 없는 원아의 빈 상태는 사진 추가 타일 없이 직접 작성을 안내한다", async () => {
     renderPage(fixtureId("child", 5)); // 정예린 — 시드에 초안이 없다
     expect(
-      await screen.findByText("아직 이 아이의 기록이 없어요. 직접 작성할 수 있어요."),
+      await screen.findByText(
+        "아직 이 아이의 기록이 없어요. 직접 작성해 저장하면 사진도 고를 수 있어요.",
+      ),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/사진을 추가하거나/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /사진 추가/ })).not.toBeInTheDocument();
   });
 
-  // '준비 중'이 스크린리더에만 읽혀, 화면을 보는 교사는 왜 눌리지 않는지 몰랐습니다(10/30 배포 점검 25번).
-  it("꺼진 사진 추가 타일은 준비 중이라고 화면에도 보여 준다", async () => {
+  // 초안이 있으면 '사진 추가'를 눌러 고릅니다. 고르는 흐름은 components/MediaPickerDialog.test.tsx에 있습니다.
+  it("검토 대기 초안의 사진 추가 타일은 눌러서 고를 수 있다", async () => {
     await renderAndWait();
-    const tile = screen.getByRole("button", { name: "사진 추가 (준비 중)" });
-    expect(tile).toBeDisabled();
-    expect(tile).toHaveTextContent("준비 중");
+    expect(screen.getByRole("button", { name: "사진 추가" })).toBeEnabled();
   });
 
   // 본문을 못 받으면 초안이 있는데도 빈 상태와 직접 작성 칸이 떴습니다. 새로 써서 저장하면 이미

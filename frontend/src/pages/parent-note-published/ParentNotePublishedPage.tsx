@@ -39,9 +39,9 @@ export function ParentNotePublishedPage() {
         footer={<Button onClick={() => navigate("/t/notes")}>게시판에서 확인</Button>}
       >
         <h2 className="text-h3 font-bold text-ink">{publishedCount}명의 알림장을 게시했어요</h2>
-        {/* Figma 문구는 '승인한 알림장과 선택한 사진을…'입니다. 지금은 알림장에 사진이 붙지 않고(10/30 배포
-            점검 10번), 교사가 사진을 빼고 게시할 수도 있어 사진을 보냈다고 읽히지 않게 뺍니다.
-            TODO(송유진): 사진을 고를 수 있게 되면 게시할 때의 include_photos를 넘겨, 보냈을 때만 사진을 적습니다. */}
+        {/* Figma 문구는 '승인한 알림장과 선택한 사진을…'입니다. 사진은 원아마다 고른 것이 달라 고르지 않은
+            원아도 있고, 교사가 사진을 빼고 게시할 수도 있습니다. 게시 응답에는 사진 수가 없어 반 전체를
+            한 문장으로 말할 수 없으므로, 사진을 보냈다고 읽히지 않게 뺍니다(10/30 배포 점검 10번). */}
         <p className="text-lead text-ink-muted">승인한 알림장을 보호자가 확인할 수 있어요.</p>
       </FocusCard>
     </>
