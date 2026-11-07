@@ -52,7 +52,7 @@ media·face는 상세 작성 엔드포인트 9개(media 6, face 3)로 다섯 가
 - 요구사항: FR-15
 - 권한: 교사 — 담당 반만
 - 요청: `class_id`는 헤더에서 고른 반입니다. `items[]`의 각 항목에는 네 값을 넣습니다.
-  - `client_photo_id`: 클라이언트가 만든 UUID. 사진은 `LocalPhoto.photo_id`를 쓰고, 영상·음성은 FE가 새로 만듭니다.
+  - `client_photo_id`: 클라이언트가 만든 UUID. 사진은 `LocalPhoto.photo_id`를 쓰고, 영상·음성은 FE가 새로 만듭니다. 같은 반·같은 활동 날짜에 같은 파일(이름·크기·수정 시각)이면 FE가 같은 값을 만들어, 취소·새로고침 뒤 같은 파일을 다시 올려도 `registered`로 이어지고 두 번 저장되지 않습니다 — 임시 결정(송유진), #304.
   - `type`: `photo` / `video` / `voice_memo`
   - `content_type`
   - `size_bytes`: 클라이언트가 선언한 크기
@@ -109,7 +109,7 @@ media·face는 상세 작성 엔드포인트 9개(media 6, face 3)로 다섯 가
 - PUT 요청에는 `upload_headers`를 그대로 붙여야 서명이 맞습니다. 서버가 같은 형식의 다른 이름(예: 브라우저마다 다른 MIME)을 대표값 하나로 바꿔 서명하므로, 요청에 보낸 `content_type`이 아니라 이 값을 씁니다.
 - 같은 요청에 같은 `client_photo_id`가 두 번 있으면 두 항목에 같은 결과가 옵니다(URL은 한 번만 서명).
 - 파일별 에러(`status: "error"`, 응답은 `200`):
-  - `MEDIA_TYPE_NOT_ALLOWED` — 허용 형식(JPG·PNG·HEIC / MP4·MOV / M4A·WAV, Figma 기준)이 아니거나 `type`과 맞지 않을 때. 브라우저가 형식을 몰라 `content_type`을 비운 경우도 여기에 걸리므로, FE는 빈 값이면 확장자로 채워 보냅니다.
+  - `MEDIA_TYPE_NOT_ALLOWED` — 허용 형식(JPG·PNG·HEIC / MP4·MOV / M4A·WAV, Figma 기준)이 아니거나 `type`과 맞지 않을 때. 브라우저가 형식을 비우거나(HEIC 등) `application/octet-stream`을 주는 경우도 여기에 걸리므로, FE는 아는 확장자면 브라우저 값 대신 확장자로 형식을 정해 보냅니다(#304).
   - `UPLOAD_BATCH_TOO_LARGE` — 그 파일이 종류별 크기 상한을 넘을 때
   - `CLIENT_PHOTO_ID_CONFLICT` — 같은 `client_photo_id`가 다른 반에 이미 있을 때
 - 요청 전체 에러(아무 파일도 발급하지 않음):
