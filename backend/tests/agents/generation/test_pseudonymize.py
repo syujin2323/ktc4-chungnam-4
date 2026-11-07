@@ -3,7 +3,11 @@ from datetime import date
 import pytest
 
 from tools.contracts import AssignmentStatus, EvidenceItem, SourceType
-from tools.generation.pseudonymize import pseudonymize_evidence, restore_names
+from tools.generation.pseudonymize import (
+    mentions_other_child,
+    pseudonymize_evidence,
+    restore_names,
+)
 
 RECORD_DATE = date(2026, 9, 8)
 # 실제 원아가 아닌 합성 이름이다 (루트 CLAUDE.md §Git: 실제 원아 정보 금지).
@@ -128,3 +132,16 @@ def test_ㄹ_받침과_서술격_조사도_맞춘다(text, expected):
     names = {"CHILD_A": "하늘", "CHILD_B": "가나", "CHILD_C": "민준"}
 
     assert restore_names(text, names) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("내일도 CHILD_A와 즐겁게 지낼게요.", False),
+        ("편안한 저녁 보내세요.", False),
+        ("CHILD_B와 함께 놀았어요.", True),
+        ("CHILD_A는 CHILD_AB와 놀았어요.", True),
+    ],
+)
+def test_대상_원아가_아닌_토큰이_있는지_가린다(text: str, expected: bool):
+    assert mentions_other_child(text) is expected

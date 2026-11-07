@@ -15,6 +15,7 @@ from tools.contracts import (
     VerificationCheckType,
     VerificationIssue,
 )
+from tools.generation.pseudonymize import mentions_other_child
 
 
 def validate_target(
@@ -41,6 +42,16 @@ def validate_target(
         )
 
     for sentence in document.sentences:
+        # 근거 없는 문장(인사·안부)에 다른 원아가 나오면 대조할 근거 없이 그 아이 이야기를 쓴 것이다.
+        if not sentence.evidence_ids and mentions_other_child(sentence.text):
+            issues.append(
+                VerificationIssue(
+                    sentence_id=sentence.sentence_id,
+                    check_type=VerificationCheckType.WRONG_CHILD_EVIDENCE,
+                    reason="근거 없는 문장이 다른 원아를 언급했습니다.",
+                )
+            )
+
         for evidence_id in sentence.evidence_ids:
             evidence = evidence_by_id.get(evidence_id)
             if evidence is None:

@@ -839,7 +839,8 @@ export function DraftReviewPage() {
                 ) : (
                   draft.sentences.map((sentence) =>
                     // 근거가 없는 문장은 밑줄·클릭 없이 일반 문단으로 보여 줍니다.
-                    // 교사가 직접 쓴 글과 교사가 고친 문장(서버가 근거를 끊음)이 여기에 해당합니다.
+                    // 교사가 직접 쓴 글, 교사가 고친 문장(서버가 근거를 끊음), AI가 쓴 인사·안부가
+                    // 여기에 해당합니다.
                     sentence.evidences.length === 0 ? (
                       <p
                         key={sentence.sentence_id}

@@ -4,7 +4,7 @@ from datetime import date
 import pytest
 
 from tools.contracts import DocType
-from tools.generation.draft import DraftResponseError, parse_draft_response
+from tools.generation.draft import ACCEPTED_SENTENCES, DraftResponseError, parse_draft_response
 
 RECORD_DATE = date(2026, 9, 8)
 REFS = {"E1": "ev-1", "E2": "ev-2"}
@@ -40,6 +40,12 @@ def test_참조를_서버_ID로_되돌리고_문장_ID를_순서대로_붙인다
     ]
 
 
+def test_본문_상한을_조금_넘긴_글은_버리지_않는다():
+    document = _parse(_answer(*[("탑을 쌓았어요.", ["E1"])] * ACCEPTED_SENTENCES))
+
+    assert len(document.sentences) == ACCEPTED_SENTENCES
+
+
 def test_코드_블록으로_감싼_응답도_받는다():
     raw = "```json\n" + _answer(("탑을 쌓았어요.", ["E1"])) + "\n```"
 
@@ -62,7 +68,7 @@ def test_근거_참조가_빠진_문장은_코드_검증에_맡긴다():
         json.dumps({"sentences": []}),
         json.dumps({"sentences": [{"text": "  ", "evidence_refs": ["E1"]}]}),
         json.dumps({"sentences": [{"text": "a", "evidence_refs": ["E1"], "extra": 1}]}),
-        _answer(*[("문장", ["E1"])] * 11),
+        _answer(*[("문장", ["E1"])] * (ACCEPTED_SENTENCES + 1)),
     ],
 )
 def test_약속한_형식이_아니면_거부한다(raw):

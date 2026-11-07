@@ -119,6 +119,11 @@ def pseudonymize_evidence(
     )
 
 
+def mentions_other_child(text: str) -> bool:
+    """본문에 대상 원아가 아닌 토큰(CHILD_B…)이 있는가."""
+    return any(token != TARGET_CHILD_TOKEN for token in _TOKEN_PATTERN.findall(text))
+
+
 def restore_names(text: str, name_by_token: Mapping[str, str]) -> str:
     """토큰을 실명으로 되돌리고, 바로 뒤 조사를 이름의 받침에 맞춘다.
 

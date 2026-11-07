@@ -28,6 +28,26 @@ def test_다른_원아의_근거를_참조하면_실패한다():
     assert issues[0].check_type == VerificationCheckType.WRONG_CHILD_EVIDENCE
 
 
+def test_근거_없는_문장이_다른_원아를_부르면_실패한다():
+    document = _document(
+        [DraftSentence(sentence_id="s1", text="CHILD_B와 사이좋게 지냈어요.", evidence_ids=[])]
+    )
+
+    issues = validate_target(document, EVIDENCE_BY_ID, request=REQUEST)
+
+    assert [(issue.sentence_id, issue.check_type) for issue in issues] == [
+        ("s1", VerificationCheckType.WRONG_CHILD_EVIDENCE)
+    ]
+
+
+def test_근거_없는_문장이_대상_원아만_부르면_통과한다():
+    document = _document(
+        [DraftSentence(sentence_id="s1", text="내일도 CHILD_A와 즐겁게 지낼게요.", evidence_ids=[])]
+    )
+
+    assert validate_target(document, EVIDENCE_BY_ID, request=REQUEST) == []
+
+
 def test_대상_미확인_근거를_참조하면_실패한다():
     document = _document(
         [DraftSentence(sentence_id="s1", text="미끄럼틀을 탔다", evidence_ids=["ev_004"])]

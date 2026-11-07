@@ -21,6 +21,9 @@ from pydantic import Field, ValidationError
 from tools.contracts import ContractModel, DocType, DraftDocument, DraftSentence, NonEmpty
 
 MAX_SENTENCES = 10
+# GLM은 본문의 상한을 1~3개 넘길 때가 있다(11/07 실측 30번 중 6번, 최대 13개). 문장 수만 넘은 글을
+# 형식 오류로 버리면 재생성만 늘고 초안이 없어질 수 있어 받아들이는 상한에는 여유를 둔다. 교사가 줄인다.
+ACCEPTED_SENTENCES = MAX_SENTENCES + 5
 
 _CODE_FENCE = re.compile(r"\A```(?:json)?\s*(.*?)\s*```\Z", re.DOTALL)
 
@@ -35,7 +38,7 @@ class _AnswerSentence(ContractModel):
 
 
 class _Answer(ContractModel):
-    sentences: list[_AnswerSentence] = Field(min_length=1, max_length=MAX_SENTENCES)
+    sentences: list[_AnswerSentence] = Field(min_length=1, max_length=ACCEPTED_SENTENCES)
 
 
 def parse_draft_response(

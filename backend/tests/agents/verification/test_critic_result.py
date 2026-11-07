@@ -17,6 +17,56 @@ def _document() -> DraftDocument:
     )
 
 
+def _note_with_greeting() -> DraftDocument:
+    return DraftDocument(
+        doc_type=DocType.PARENT_NOTE,
+        child_id="child_A",
+        record_date=RECORD_DATE,
+        sentences=[
+            DraftSentence(sentence_id="s1", text="안녕하세요, 어머님!", evidence_ids=[]),
+            DraftSentence(sentence_id="s2", text="탑을 만들었어요", evidence_ids=["ev_001"]),
+        ],
+    )
+
+
+def _verdict(sentence_id: str, verdict: str, evidence_ids: list[str]) -> dict:
+    return {
+        "sentence_id": sentence_id,
+        "verdict": verdict,
+        "reason_code": "ok" if verdict == "pass" else "unsupported_claim",
+        "detail": "판정 이유",
+        "evidence_ids": evidence_ids,
+    }
+
+
+def test_근거_없는_문장은_빈_근거로_통과할_수_있다():
+    raw = json.dumps([_verdict("s1", "pass", []), _verdict("s2", "pass", ["ev_001"])])
+
+    result = parse_critic_response(raw, _note_with_greeting())
+
+    assert result.passed is True
+
+
+def test_근거_없는_문장에_사실이_담겼다는_판정은_내용_실패다():
+    raw = json.dumps([_verdict("s1", "fail", []), _verdict("s2", "pass", ["ev_001"])])
+
+    result = parse_critic_response(raw, _note_with_greeting())
+
+    assert result.passed is False
+    assert [(issue.sentence_id, issue.check_type) for issue in result.issues] == [
+        ("s1", VerificationCheckType.CRITIC_CONTENT)
+    ]
+
+
+def test_근거_있는_문장을_빈_근거로_통과시키면_응답_오류다():
+    raw = json.dumps([_verdict("s1", "pass", []), _verdict("s2", "pass", [])])
+
+    result = parse_critic_response(raw, _note_with_greeting())
+
+    assert result.passed is False
+    assert result.issues[0].check_type == VerificationCheckType.CRITIC_RESPONSE_ERROR
+
+
 def test_모든_문장이_pass면_전체_통과한다():
     raw = json.dumps(
         [

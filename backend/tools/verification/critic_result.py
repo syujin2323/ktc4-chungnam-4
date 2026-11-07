@@ -68,7 +68,8 @@ def parse_critic_response(raw_response: str | None, document: DraftDocument) -> 
         sentence = next(s for s in document.sentences if s.sentence_id == sentence_id)
         if not set(item.evidence_ids).issubset(sentence.evidence_ids):
             return _error_result(document, "문장에 연결되지 않은 근거를 참조했습니다.")
-        if verdict == "pass" and not item.evidence_ids:
+        # 근거 없는 문장(인사·안부)은 검토할 근거가 없으니 빈 목록으로 통과한다.
+        if verdict == "pass" and sentence.evidence_ids and not item.evidence_ids:
             return _error_result(document, "통과 판정에 검토한 근거가 없습니다.")
 
         seen_sentence_ids.add(sentence_id)

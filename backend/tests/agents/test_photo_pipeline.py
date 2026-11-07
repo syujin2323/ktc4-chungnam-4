@@ -1122,3 +1122,51 @@ def test_사진으로_만든_초안은_근거_사진을_보낼_사진의_기본_
     assert detail["selected_media_ids"] == [str(media)]
     # 선택 사진은 화면이 그릴 수 있게 media에도 실려 온다
     assert str(media) in {item["media_id"] for item in detail["media"]}
+
+
+# 11/07 배포 점검: 근거 문장만 쓰게 하니 관찰이 적은 날 글이 한두 문장으로 끝났다.
+def test_인사처럼_근거_없는_문장은_초안에_남고_문장근거는_관찰_문장에만_붙는다(
+    flow: Flow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, factory, klass, children, pending, _ = flow
+    login(client, TEACHER_EMAIL)
+
+    def llm(prompt: str) -> str:
+        if '"sentence_id"' in prompt:
+            return json.dumps(
+                [
+                    {
+                        "sentence_id": "s1",
+                        "verdict": "pass",
+                        "reason_code": "ok",
+                        "detail": "사실을 담지 않은 인사",
+                        "evidence_ids": [],
+                    },
+                    {
+                        "sentence_id": "s2",
+                        "verdict": "pass",
+                        "reason_code": "ok",
+                        "detail": "근거와 일치",
+                        "evidence_ids": ["E1"],
+                    },
+                ]
+            )
+        return json.dumps(
+            {
+                "sentences": [
+                    {"text": "안녕하세요, 어머님!", "evidence_refs": []},
+                    {"text": "CHILD_A는 블록을 쌓으며 놀이했어요.", "evidence_refs": ["E1"]},
+                ]
+            }
+        )
+
+    monkeypatch.setattr(service, "call_claude", llm)
+    media = photo(factory, klass, [children[0]])
+
+    result = run(client, klass, media, pending)
+
+    draft_id = result["children"][0]["drafts"][0]["draft_id"]
+    sentences = client.get(f"/api/v1/drafts/{draft_id}").json()["sentences"]
+    assert sentences[0]["text"] == "안녕하세요, 어머님!"
+    assert sentences[0]["evidences"] == []
+    assert [item["media_id"] for item in sentences[1]["evidences"]] == [str(media)]
