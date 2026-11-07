@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 
@@ -156,5 +156,94 @@ describe("ParentMediaPage", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("열람 기간이 지났습니다.");
     expect(screen.queryByRole("button", { name: "다시 불러오기" })).not.toBeInTheDocument();
+  });
+  describe("검색", () => {
+    const EMPTY: ParentMediaList = { days: [], next_cursor: null, photo_count: 0, video_count: 0 };
+
+    it("입력이 멈추면 서버에 찾고 받은 결과와 개수를 보여 준다", async () => {
+      const user = userEvent.setup();
+      const keywords: (string | null)[] = [];
+      server.use(
+        http.get(apiPath(`/children/${CHILD}/parent-media`), ({ request }) => {
+          const q = new URL(request.url).searchParams.get("q");
+          keywords.push(q);
+          return HttpResponse.json(
+            q ? { ...SECOND_PAGE, photo_count: 1, video_count: 0 } : FIRST_PAGE,
+          );
+        }),
+      );
+      renderPage();
+
+      await user.type(await screen.findByRole("searchbox", { name: "사진·영상 검색" }), "모래");
+
+      expect(await screen.findByRole("tab", { name: "전체 1" })).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "2026년 10월 17일 토요일" })).toBeInTheDocument();
+      expect(
+        screen.queryByRole("region", { name: "2026년 10월 20일 화요일" }),
+      ).not.toBeInTheDocument();
+      expect(keywords).toEqual([null, "모래"]);
+    });
+
+    it("맞는 것이 없으면 안내하고, 전체 보기로 돌아온다", async () => {
+      const user = userEvent.setup();
+      server.use(
+        http.get(apiPath(`/children/${CHILD}/parent-media`), ({ request }) =>
+          HttpResponse.json(new URL(request.url).searchParams.get("q") ? EMPTY : FIRST_PAGE),
+        ),
+      );
+      renderPage();
+
+      await user.type(await screen.findByRole("searchbox", { name: "사진·영상 검색" }), "없는 말");
+
+      expect(await screen.findByText("맞는 사진·영상이 없어요")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "전체 사진·영상 보기" }));
+
+      expect(
+        await screen.findByRole("region", { name: "2026년 10월 20일 화요일" }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("searchbox", { name: "사진·영상 검색" })).toHaveValue("");
+    });
+
+    it("받은 사진이 하나도 없으면 검색칸을 보여 주지 않는다", async () => {
+      server.use(
+        http.get(apiPath(`/children/${CHILD}/parent-media`), () => HttpResponse.json(EMPTY)),
+      );
+      renderPage();
+
+      expect(await screen.findByText("아직 받은 사진·영상이 없어요")).toBeInTheDocument();
+      expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+    });
+  });
+
+  // 표시 URL은 15분이면 만료됩니다. 한 번만 다시 받으면 화면을 오래 열어 둔 뒤 두 번째 만료에서
+  // 사진이 계속 깨져 있었습니다(#287 리뷰). 정말 깨진 사진이 계속 다시 받게 하지는 않습니다.
+  it("사진이 깨지면 목록을 다시 받되 1분에 한 번까지만 받는다", async () => {
+    let listCalls = 0;
+    server.use(
+      http.get(apiPath(`/children/${CHILD}/parent-media`), () => {
+        listCalls += 1;
+        return HttpResponse.json(FIRST_PAGE);
+      }),
+    );
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-10-20T09:00:00Z"));
+      renderPage();
+      const [firstTile] = await screen.findAllByRole("button", { name: /크게 보기/ });
+      const image = firstTile?.querySelector("img");
+      if (!image) throw new Error("사진 타일이 없습니다");
+      expect(listCalls).toBe(1);
+
+      fireEvent.error(image);
+      await waitFor(() => expect(listCalls).toBe(2));
+      fireEvent.error(image);
+      expect(listCalls).toBe(2);
+
+      vi.setSystemTime(new Date("2026-10-20T09:01:01Z"));
+      fireEvent.error(image);
+      await waitFor(() => expect(listCalls).toBe(3));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
