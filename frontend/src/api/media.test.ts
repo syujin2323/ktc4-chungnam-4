@@ -3,9 +3,17 @@ import { ApiError } from "@/lib/api-client";
 import { uploadContentType, uploadFile } from "./media";
 
 describe("uploadContentType", () => {
-  it("브라우저가 준 형식이 있으면 그대로 쓴다", () => {
+  it("아는 확장자는 브라우저가 준 형식과 같은 값을 쓴다", () => {
     expect(uploadContentType({ name: "합성.jpg", type: "image/jpeg" })).toBe("image/jpeg");
   });
+
+  // 기기마다 같은 m4a에 다른 형식을 줍니다. octet-stream은 서버가 거절합니다(#304 4-9).
+  it.each(["application/octet-stream", "audio/x-m4a", ""])(
+    "m4a는 브라우저가 %s를 줘도 audio/mp4로 보낸다",
+    (type) => {
+      expect(uploadContentType({ name: "합성.m4a", type })).toBe("audio/mp4");
+    },
+  );
 
   // 브라우저가 HEIC 등의 형식을 모르면 file.type이 빈 값이라 서버가 거절합니다(API 문서 §media).
   it.each([
@@ -17,8 +25,9 @@ describe("uploadContentType", () => {
     expect(uploadContentType({ name, type: "" })).toBe(expected);
   });
 
-  it("모르는 확장자는 빈 값으로 두어 서버가 사유와 함께 거절하게 한다", () => {
+  it("모르는 확장자는 브라우저가 준 값을 그대로 두어 서버가 사유와 함께 거절하게 한다", () => {
     expect(uploadContentType({ name: "합성.zip", type: "" })).toBe("");
+    expect(uploadContentType({ name: "합성.txt", type: "text/plain" })).toBe("text/plain");
   });
 });
 

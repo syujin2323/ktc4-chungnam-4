@@ -79,13 +79,13 @@ const CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
 };
 
 /**
- * 업로드 URL 요청에 실을 형식. 브라우저가 형식을 모르면(HEIC 등) file.type이 빈 값이라 서버가
- * MEDIA_TYPE_NOT_ALLOWED로 거절하므로, 빈 값이면 확장자로 채웁니다(API 문서 §media).
+ * 업로드 URL 요청에 실을 형식. 큐는 확장자로 받을 파일을 고르므로 형식도 확장자로 정합니다(API 문서 §media).
+ * 브라우저는 같은 파일에 빈 값(HEIC 등)이나 `application/octet-stream`을 주기도 하는데, 서버는 둘 다
+ * MEDIA_TYPE_NOT_ALLOWED로 거절합니다(#304 4-9). 모르는 확장자만 브라우저가 준 값을 그대로 보냅니다.
  */
 export function uploadContentType(file: { name: string; type: string }) {
-  if (file.type) return file.type;
   const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
-  return CONTENT_TYPE_BY_EXTENSION[extension] ?? "";
+  return CONTENT_TYPE_BY_EXTENSION[extension] ?? file.type;
 }
 
 /** 서버가 upload-urls 한 번에 받는 파일 수. 넘으면 400 UPLOAD_BATCH_TOO_LARGE입니다(API 문서 §media, 임시 결정(김동건)). */
