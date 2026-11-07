@@ -7,6 +7,7 @@ import { useCurrentClass } from "@/features/class-context/use-current-class";
 import {
   isPhoto,
   type LocalClip,
+  uploadErrorMessage,
   useUploadQueue,
 } from "@/features/upload-queue/upload-queue-store";
 
@@ -27,11 +28,20 @@ function clipsToUpload(): LocalClip[] {
 }
 
 /** 큐를 비우거나(취소·전송 끝) 새로 채운 뒤에 끝난 업로드가 다른 배치의 항목을 바꾸지 않게 파일로 대조합니다. */
-function setIfStillQueued(clip: LocalClip, state: "확인됨" | "실패", mediaId?: string) {
-  const { items, setUploadState } = useUploadQueue.getState();
-  if (items.some((item) => item.client_id === clip.client_id && item.file === clip.file)) {
-    setUploadState(clip.client_id, state, mediaId);
-  }
+function isStillQueued(clip: LocalClip) {
+  return useUploadQueue
+    .getState()
+    .items.some((item) => item.client_id === clip.client_id && item.file === clip.file);
+}
+
+function doneIfStillQueued(clip: LocalClip, mediaId: string) {
+  if (isStillQueued(clip))
+    useUploadQueue.getState().setUploadState(clip.client_id, "확인됨", mediaId);
+}
+
+function failIfStillQueued(clip: LocalClip, error: unknown) {
+  if (isStillQueued(clip))
+    useUploadQueue.getState().failUpload(clip.client_id, uploadErrorMessage(error));
 }
 
 /**
@@ -46,9 +56,9 @@ export async function startClipUploads(classId: string) {
   // 기다리기 전에 전송중으로 바꿔 두어 동시에 부른 쪽이 같은 파일을 또 올리지 않게 합니다.
   const { setUploadState } = useUploadQueue.getState();
   for (const clip of clips) setUploadState(clip.client_id, "전송중");
-  let current = 0;
+  let tickets: Awaited<ReturnType<typeof requestUploadUrls>>["items"];
   try {
-    const { items } = await requestUploadUrls({
+    ({ items: tickets } = await requestUploadUrls({
       class_id: classId,
       items: clips.map((clip) => ({
         client_photo_id: clip.client_id,
@@ -56,10 +66,17 @@ export async function startClipUploads(classId: string) {
         content_type: uploadContentType(clip.file),
         size_bytes: clip.file.size,
       })),
-    });
-    for (const [index, clip] of clips.entries()) {
-      current = index;
-      const ticket = items[index];
+    }));
+  } catch (error) {
+    // 주소를 하나도 못 받았으면 모두 실패로 둡니다. 화면의 "다시 올리기"나 서버 전송 단계가 다시 올립니다.
+    for (const clip of clips) failIfStillQueued(clip, error);
+    return;
+  }
+  // 실패는 정상 흐름의 일부입니다. 서버가 한 파일만 거절해도(형식·크기) 그 파일만 실패로 두고 나머지는 이어
+  // 올립니다(#304 4-10). 이유는 분류 화면이 보여 줍니다.
+  for (const [index, clip] of clips.entries()) {
+    try {
+      const ticket = tickets[index];
       if (!ticket) throw new Error("업로드 URL 응답의 항목 수가 요청과 다릅니다.");
       // 이미 등록된 파일(registered)이면 올리지 않고 그 media_id를 씁니다.
       let mediaId: string;
@@ -76,11 +93,10 @@ export async function startClipUploads(classId: string) {
           })
         ).media_id;
       }
-      setIfStillQueued(clip, "확인됨", mediaId);
+      doneIfStillQueued(clip, mediaId);
+    } catch (error) {
+      failIfStillQueued(clip, error);
     }
-  } catch {
-    // 실패는 정상 흐름의 일부입니다. 남은 파일을 실패로 두고, 화면의 "다시 올리기"나 서버 전송 단계가 다시 올립니다.
-    for (const clip of clips.slice(current)) setIfStillQueued(clip, "실패");
   }
 }
 

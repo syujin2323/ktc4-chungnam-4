@@ -5,6 +5,8 @@ interface TranscriptStatusProps {
   workingCount: number;
   /** 올리지 못한 영상·음성 수 — "다시 올리기"로 복구됩니다. */
   uploadFailedCount: number;
+  /** 올리지 못한 이유. 형식·크기처럼 다시 올려도 같은 이유면 교사가 그 파일 없이 계속할지 정합니다. */
+  uploadFailureReasons?: readonly string[];
   /** 올라갔지만 STT가 실패한 영상·음성 수 — 다시 올려도 STT는 다시 돌지 않아 버튼을 두지 않습니다. */
   sttFailedCount: number;
   /** 발화 목록 조회 실패 */
@@ -17,6 +19,7 @@ interface TranscriptStatusProps {
 export function TranscriptStatus({
   workingCount,
   uploadFailedCount,
+  uploadFailureReasons = [],
   sttFailedCount,
   error,
   onRetryUpload,
@@ -52,6 +55,7 @@ export function TranscriptStatus({
         <p>
           영상·음성 {uploadFailedCount}개를 올리지 못했어요. 다시 올리면 발화를 얻을 수 있고, 발화
           없이 계속할 수도 있어요.
+          {uploadFailureReasons.length > 0 ? ` (이유: ${uploadFailureReasons.join(" / ")})` : null}
           {sttFailedCount > 0
             ? ` 올라간 ${sttFailedCount}개는 발화를 얻지 못해 발화 없이 이어가요.`
             : null}

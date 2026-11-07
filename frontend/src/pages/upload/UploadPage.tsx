@@ -6,6 +6,7 @@ import { useNavigate } from "react-router";
 
 import { PageHeader } from "@/components/common/PageHeader";
 import { Button } from "@/components/ui/button";
+import { useCurrentClass } from "@/features/class-context/use-current-class";
 import {
   ACCEPTED_EXTENSIONS,
   isImportDone,
@@ -43,7 +44,10 @@ export function UploadPage() {
   const recordDate = useUploadQueue((state) => state.recordDate);
   const setRecordDate = useUploadQueue((state) => state.setRecordDate);
   const rejected = useUploadQueue((state) => state.rejected);
-  const addFiles = useUploadQueue((state) => state.addFiles);
+  const addToQueue = useUploadQueue((state) => state.addFiles);
+  // 같은 반·날짜에 같은 파일을 다시 넣으면 서버가 이미 받은 파일로 알아보게 반을 함께 넘깁니다(#304 4-11).
+  const { currentClass } = useCurrentClass();
+  const addFiles = (files: File[]) => addToQueue(files, currentClass?.class_id);
   const removeRejected = useUploadQueue((state) => state.removeRejected);
   const done = isImportDone(items);
 

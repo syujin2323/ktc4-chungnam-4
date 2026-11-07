@@ -22,6 +22,26 @@ describe("TranscriptStatus 실패 안내", () => {
     expect(screen.getByRole("button", { name: "다시 올리기" })).toBeInTheDocument();
   });
 
+  it("올리지 못한 이유를 함께 보여 줍니다 (#304 4-10)", () => {
+    render(
+      <TranscriptStatus
+        workingCount={0}
+        uploadFailedCount={2}
+        uploadFailureReasons={[
+          "파일이 너무 커서 올릴 수 없어요.",
+          "올릴 수 없는 형식의 파일이에요.",
+        ]}
+        sttFailedCount={0}
+        error={null}
+        onRetryUpload={vi.fn()}
+        onRefetch={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "이유: 파일이 너무 커서 올릴 수 없어요. / 올릴 수 없는 형식의 파일이에요.",
+    );
+  });
+
   it("STT만 실패하면 다시 올리기 대신 발화 없이 계속하는 안내만 보여 줍니다", () => {
     setup({ sttFailedCount: 2 });
     expect(screen.queryByRole("button", { name: "다시 올리기" })).not.toBeInTheDocument();

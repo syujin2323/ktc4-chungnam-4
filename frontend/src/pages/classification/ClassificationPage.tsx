@@ -102,6 +102,7 @@ export function ClassificationPage() {
       <TranscriptStatus
         workingCount={transcripts.workingCount}
         uploadFailedCount={transcripts.uploadFailedCount}
+        uploadFailureReasons={transcripts.uploadFailureReasons}
         sttFailedCount={transcripts.sttFailedCount}
         error={transcripts.error}
         onRetryUpload={transcripts.retryUpload}

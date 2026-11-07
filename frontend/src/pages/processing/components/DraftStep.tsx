@@ -33,9 +33,12 @@ export function DraftStep({ onDone, onCancel }: DraftStepProps) {
   // 같은 요청이 두 번 가도 작업이 하나만 생기게 하는 키입니다. 화면에 머무는 동안 바뀌지 않습니다.
   const [requestId] = useState(() => crypto.randomUUID());
   const [recordDate] = useState(() => useUploadQueue.getState().recordDate);
-  // 이번에 보낸 자료. 전송 단계에서 ack를 받은 것만 server_media_id가 있습니다.
+  // 이번에 보낸 자료. 전송 단계에서 ack를 받은 것만 server_media_id가 있습니다. 올라갔어도 귀속 저장이
+  // 실패해 빼고 보낸 영상·음성(upload_state 실패)은 넣지 않습니다. 넣으면 서버가 MEDIA_NOT_READY로 막습니다.
   const [mediaIds] = useState(() =>
-    uploadTargets(useUploadQueue.getState().items).flatMap((item) => item.server_media_id ?? []),
+    uploadTargets(useUploadQueue.getState().items).flatMap((item) =>
+      item.upload_state === "확인됨" && item.server_media_id ? [item.server_media_id] : [],
+    ),
   );
   const started = useRef(false);
 

@@ -168,7 +168,7 @@ export function TodayPage() {
     setDragging(false);
     // 분류 단계로 넘어간 큐에는 새 파일을 섞지 않습니다.
     if (!importStage) return;
-    addFiles(Array.from(event.dataTransfer.files));
+    addFiles(Array.from(event.dataTransfer.files), classId);
   }
 
   // 어느 화면에서든 놓은 파일을 브라우저가 열지 않게, 세 화면을 같은 드롭 영역으로 감쌉니다.
@@ -219,7 +219,7 @@ export function TodayPage() {
           aria-label="자료 파일 선택"
           className="hidden"
           onChange={(event) => {
-            addFiles(Array.from(event.target.files ?? []));
+            addFiles(Array.from(event.target.files ?? []), classId);
             event.target.value = "";
           }}
         />

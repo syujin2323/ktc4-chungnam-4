@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { kstToday, type DateOnly } from "@/lib/datetime";
+import { stableUuid } from "@/lib/stable-id";
 import { CLIPS_ENABLED } from "./media-capabilities";
 
 // 오늘 올릴 자료의 로컬 상태입니다(테크스펙 데이터 모델 ⑧ LocalBatch·LocalPhoto).
@@ -20,7 +21,11 @@ export interface ChildCandidate {
 }
 
 interface LocalMediaBase {
-  /** 클라이언트가 만든 UUID. 영상·음성도 서버에 client_photo_id로 보냅니다(API 문서 §media). */
+  /**
+   * 클라이언트가 만든 UUID. 영상·음성도 서버에 client_photo_id로 보냅니다(API 문서 §media).
+   * 같은 반·날짜에 같은 파일이면 같은 값입니다(`uploadClientId`). 취소·새로고침 뒤 다시 넣어도 서버가
+   * 이미 받은 파일을 registered로 알아봐 두 번 저장하지 않습니다(#304 4-11).
+   */
   client_id: string;
   file: File;
   /** 이 기기로 불러온 정도(0~100) */
@@ -91,9 +96,25 @@ export function mediaKindOf(fileName: string): MediaKind | null {
   return KIND_BY_EXTENSION[extension] ?? null;
 }
 
-function toLocalMedia(file: File, kind: MediaKind): LocalMedia {
+/**
+ * 파일 하나의 client_id. 파일 이름·크기·수정 시각과 반·활동 날짜로 정합니다. 이름은 해시로만 쓰고 어디에도
+ * 남기지 않습니다(H-4). 다른 날짜로 올리는 같은 사진은 다른 자료라 날짜를 넣고, 서버는 같은 값이 다른 반에서
+ * 쓰이면 거절하므로(CLIENT_PHOTO_ID_CONFLICT) 반도 넣습니다.
+ */
+export function uploadClientId(file: File, classId: string, recordDate: DateOnly) {
+  return stableUuid([classId, recordDate, file.name, file.size, file.lastModified].join("\u0000"));
+}
+
+/**
+ * 올리지 못한 이유. 서버가 준 문구(형식·크기 등)나 연결 실패 문구를 그대로 씁니다(frontend/CLAUDE.md §데이터).
+ */
+export function uploadErrorMessage(error: unknown) {
+  return error instanceof Error && error.message ? error.message : "파일을 올리지 못했어요.";
+}
+
+function toLocalMedia(file: File, kind: MediaKind, clientId: string): LocalMedia {
   const base = {
-    client_id: crypto.randomUUID(),
+    client_id: clientId,
     file,
     import_progress: 0,
     upload_state: "대기" as const,
@@ -128,8 +149,13 @@ interface UploadQueueState {
   items: LocalMedia[];
   /** 형식이 안 맞아 담지 않은 파일 이름. 같은 이름은 한 번만 둡니다. 서버로는 보내지 않습니다. */
   rejected: string[];
-  /** 지원하는 형식만 담고, 나머지는 rejected에 남겨 업로드 실패 화면(1:2520)이 안내합니다. */
-  addFiles: (files: readonly File[]) => void;
+  /** 올리지 못한 항목의 이유(client_id → 문구). upload_state가 실패인 항목만 둡니다. */
+  uploadErrors: Record<string, string>;
+  /**
+   * 지원하는 형식만 담고, 나머지는 rejected에 남겨 업로드 실패 화면(1:2520)이 안내합니다.
+   * 이미 담긴 파일을 다시 넣으면 건너뜁니다. classId는 client_id를 정하는 데 씁니다(`uploadClientId`).
+   */
+  addFiles: (files: readonly File[], classId?: string) => void;
   /** 안내를 본 교사가 형식 오류 파일을 목록에서 뺄 때 씁니다. */
   removeRejected: (fileName: string) => void;
   /**
@@ -141,6 +167,8 @@ interface UploadQueueState {
   /** 얼굴 분류 화면(④)이 교사 확인 결과를 남길 때 씁니다. */
   setReview: (clientId: string, result: ReviewResult) => void;
   setUploadState: (clientId: string, state: UploadState, serverMediaId?: string) => void;
+  /** 그 항목만 실패로 두고 이유를 남깁니다. 다른 항목의 업로드는 이어 갑니다(#304 4-10). */
+  failUpload: (clientId: string, reason: string) => void;
   reset: () => void;
 }
 
@@ -149,14 +177,23 @@ export const useUploadQueue = create<UploadQueueState>()((set) => ({
   setRecordDate: (recordDate) => set({ recordDate }),
   items: [],
   rejected: [],
-  addFiles: (files) =>
+  uploadErrors: {},
+  addFiles: (files, classId = "") =>
     set((state) => {
       const accepted: LocalMedia[] = [];
+      const queued = new Set(state.items.map((item) => item.client_id));
       const rejected = new Set(state.rejected);
       for (const file of files) {
         const kind = mediaKindOf(file.name);
-        if (kind && (CLIPS_ENABLED || kind === "photo")) accepted.push(toLocalMedia(file, kind));
-        else rejected.add(file.name);
+        if (!kind || !(CLIPS_ENABLED || kind === "photo")) {
+          rejected.add(file.name);
+          continue;
+        }
+        const clientId = uploadClientId(file, classId, state.recordDate);
+        // 같은 파일을 두 번 고르면 한 번만 담습니다. 두 항목이 같은 client_id를 가지면 상태가 섞입니다.
+        if (queued.has(clientId)) continue;
+        queued.add(clientId);
+        accepted.push(toLocalMedia(file, kind, clientId));
       }
       return { items: [...state.items, ...accepted], rejected: [...rejected] };
     }),
@@ -186,18 +223,32 @@ export const useUploadQueue = create<UploadQueueState>()((set) => ({
       ),
     })),
   setUploadState: (clientId, uploadState, serverMediaId) =>
+    set((state) => {
+      // 다시 올리기 시작하거나 받았으면 지난 실패 이유는 지웁니다.
+      const uploadErrors = Object.fromEntries(
+        Object.entries(state.uploadErrors).filter(([id]) => id !== clientId),
+      );
+      return {
+        items: state.items.map((item) =>
+          item.client_id === clientId
+            ? {
+                ...item,
+                upload_state: uploadState,
+                server_media_id: serverMediaId ?? item.server_media_id,
+              }
+            : item,
+        ),
+        uploadErrors: uploadState === "실패" ? state.uploadErrors : uploadErrors,
+      };
+    }),
+  failUpload: (clientId, reason) =>
     set((state) => ({
       items: state.items.map((item) =>
-        item.client_id === clientId
-          ? {
-              ...item,
-              upload_state: uploadState,
-              server_media_id: serverMediaId ?? item.server_media_id,
-            }
-          : item,
+        item.client_id === clientId ? { ...item, upload_state: "실패" } : item,
       ),
+      uploadErrors: { ...state.uploadErrors, [clientId]: reason },
     })),
-  reset: () => set({ items: [], rejected: [], recordDate: kstToday() }),
+  reset: () => set({ items: [], rejected: [], uploadErrors: {}, recordDate: kstToday() }),
 }));
 
 export function isPhoto(item: LocalMedia): item is LocalPhoto {

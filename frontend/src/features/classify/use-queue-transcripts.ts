@@ -39,6 +39,7 @@ export function useQueueTranscripts() {
   const { retry } = useClipUploads();
   const recordDate = useUploadQueue((state) => state.recordDate);
   const items = useUploadQueue((state) => state.items);
+  const uploadErrors = useUploadQueue((state) => state.uploadErrors);
   const clips = items.filter((item): item is LocalClip => !isPhoto(item));
   // 올라간 파일만 조회합니다. 올리기 전 파일끼리 같은 키로 겹치지 않게 합니다.
   const uploaded = clips.filter((clip) => clip.server_media_id !== null);
@@ -86,6 +87,14 @@ export function useQueueTranscripts() {
       .length,
     /** 올리지 못한 파일 수. 다시 올리면 복구됩니다. */
     uploadFailedCount: perClip.filter((c) => c.state === "upload_failed").length,
+    /** 올리지 못한 이유(서버·연결 문구). 같은 이유는 한 번만 둡니다. 형식·크기라면 다시 올려도 같습니다. */
+    uploadFailureReasons: [
+      ...new Set(
+        perClip.flatMap((c) =>
+          c.state === "upload_failed" ? (uploadErrors[c.clip.client_id] ?? []) : [],
+        ),
+      ),
+    ],
     /** 올라갔지만 서버 STT가 실패한 파일 수. 다시 올려도 STT는 다시 돌지 않습니다. */
     sttFailedCount: perClip.filter((c) => c.state === "stt_failed").length,
     error: perClip.find((c) => c.error)?.error ?? null,

@@ -10,10 +10,13 @@ import {
   transcriptQueryOptions,
   uploadContentType,
   uploadFile,
+  type UploadTicketView,
 } from "@/api/media";
+import { Button } from "@/components/ui/button";
 import { useCurrentClass } from "@/features/class-context/use-current-class";
 import {
   isPhoto,
+  uploadErrorMessage,
   uploadTargets,
   useUploadQueue,
   type LocalMedia,
@@ -25,6 +28,13 @@ import { captureInstant } from "@/lib/datetime";
 interface SendStepProps {
   onDone: () => void;
   onCancel: () => void;
+}
+
+/** 서버가 받지 않아 빼고 보낸 파일 */
+interface SkippedUpload {
+  clientId: string;
+  name: string;
+  reason: string;
 }
 
 /** 교사가 확정한 귀속. 후보에 있던 아이면 얼굴 인식, 교사가 고른 아이면 수동입니다. */
@@ -47,12 +57,18 @@ function childLinksBody(item: LocalMedia): ChildLinksInput {
  * upload-urls로 한 번에 주소를 받고, 파일마다 PUT → 완료 통지(ack)를 반복합니다(API 문서 §media).
  * 사진은 완료 통지에 귀속을 함께 실어 한 번에 저장하고, 영상·음성은 ack 뒤에 귀속을 따로 저장합니다.
  * "14 / 21개"의 분자는 받은 ack 수입니다. 마지막 귀속 저장이 끝나면 초안 생성으로 넘어갑니다(#60).
+ *
+ * 서버가 한 파일만 거절하거나(형식·크기) 한 파일에서 끊겨도 그 파일만 빼고 나머지를 보냅니다(#304 4-10).
+ * 뺀 파일이 있으면 이름과 이유를 보여 주고 교사가 확인한 뒤 초안 생성으로 넘어갑니다. 하나도 못 보냈으면
+ * 이어 갈 자료가 없어 멈춥니다.
  */
 export function SendStep({ onDone, onCancel }: SendStepProps) {
   const { currentClass } = useCurrentClass();
   const queryClient = useQueryClient();
   const [recordDate] = useState(() => useUploadQueue.getState().recordDate);
   const setUploadState = useUploadQueue((state) => state.setUploadState);
+  const failUpload = useUploadQueue((state) => state.failUpload);
+  const [skipped, setSkipped] = useState<SkippedUpload[]>([]);
   // 이 단계에 들어온 순간의 확정 목록으로 고정합니다. 전송 중에 목록이 바뀌지 않게 하려는 것입니다.
   // 사진을 먼저 보냅니다. 영상·음성 귀속(child-links)이 실패해도 앞선 사진은 이미 서버에 귀속까지 저장돼 있습니다.
   // child-links가 없는 사진 전용 배포에서는 uploadTargets가 클립을 제외합니다.
@@ -62,6 +78,48 @@ export function SendStep({ onDone, onCancel }: SendStepProps) {
   });
   const [acked, setAcked] = useState(0);
   const started = useRef(false);
+
+  async function sendOne(classId: string, item: LocalMedia, ticket: UploadTicketView | undefined) {
+    if (!ticket) throw new Error("업로드 URL 응답의 항목 수가 요청과 다릅니다.");
+    setUploadState(item.client_id, "전송중");
+    // 이미 등록된 파일(registered)이면 PUT을 건너뜁니다.
+    let mediaId = ticket.status === "registered" ? ticket.media_id : null;
+    if (ticket.status !== "registered") await uploadFile(ticket, item.file);
+    // 사진은 등록된 파일이어도 완료 통지를 다시 보냅니다. 같은 client_photo_id면 서버가 기존 media_id를
+    // 돌려주고 귀속을 전체 교체하므로, 끊긴 뒤 교사가 바꾼 귀속이 마지막 값으로 저장됩니다.
+    if (mediaId === null || isPhoto(item)) {
+      mediaId = (
+        await completeUpload(
+          isPhoto(item)
+            ? {
+                client_photo_id: item.client_id,
+                class_id: classId,
+                type: item.kind,
+                captured_at: captureInstant(recordDate, item.file.lastModified),
+                model_version: item.model_version,
+                attribution: childLinksBody(item),
+              }
+            : {
+                client_photo_id: item.client_id,
+                class_id: classId,
+                type: item.kind,
+                captured_at: captureInstant(recordDate, item.file.lastModified),
+                model_version: null,
+              },
+        )
+      ).media_id;
+    }
+    if (!isPhoto(item)) {
+      const transcript = await queryClient.fetchQuery({
+        ...transcriptQueryOptions(mediaId),
+        staleTime: 0,
+      });
+      if (transcript.attributed_at === null)
+        await saveChildLinks(mediaId, { llm_allowed: false, child_links: [] });
+    }
+    // ack와 귀속 저장까지 끝났으니 확인됨으로 둡니다. 원본 삭제는 큐를 비울 때 함께 합니다.
+    setUploadState(item.client_id, "확인됨", mediaId);
+  }
 
   const send = useMutation({
     mutationFn: async (classId: string) => {
@@ -74,51 +132,25 @@ export function SendStep({ onDone, onCancel }: SendStepProps) {
           size_bytes: item.file.size,
         })),
       });
+      const failed: SkippedUpload[] = [];
       for (const [index, item] of targets.entries()) {
-        const ticket = items[index];
-        if (!ticket) throw new Error("업로드 URL 응답의 항목 수가 요청과 다릅니다.");
-        setUploadState(item.client_id, "전송중");
-        // 이미 등록된 파일(registered)이면 PUT을 건너뜁니다.
-        let mediaId = ticket.status === "registered" ? ticket.media_id : null;
-        if (ticket.status !== "registered") await uploadFile(ticket, item.file);
-        // 사진은 등록된 파일이어도 완료 통지를 다시 보냅니다. 같은 client_photo_id면 서버가 기존 media_id를
-        // 돌려주고 귀속을 전체 교체하므로, 끊긴 뒤 교사가 바꾼 귀속이 마지막 값으로 저장됩니다.
-        if (mediaId === null || isPhoto(item)) {
-          mediaId = (
-            await completeUpload(
-              isPhoto(item)
-                ? {
-                    client_photo_id: item.client_id,
-                    class_id: classId,
-                    type: item.kind,
-                    captured_at: captureInstant(recordDate, item.file.lastModified),
-                    model_version: item.model_version,
-                    attribution: childLinksBody(item),
-                  }
-                : {
-                    client_photo_id: item.client_id,
-                    class_id: classId,
-                    type: item.kind,
-                    captured_at: captureInstant(recordDate, item.file.lastModified),
-                    model_version: null,
-                  },
-            )
-          ).media_id;
-        }
-        // ack를 받았으니 upload_state를 확인됨으로 둡니다. 원본 삭제는 큐를 비울 때 함께 합니다.
-        setUploadState(item.client_id, "확인됨", mediaId);
-        setAcked(index + 1);
-        if (!isPhoto(item)) {
-          const transcript = await queryClient.fetchQuery({
-            ...transcriptQueryOptions(mediaId),
-            staleTime: 0,
-          });
-          if (transcript.attributed_at === null)
-            await saveChildLinks(mediaId, { llm_allowed: false, child_links: [] });
+        try {
+          await sendOne(classId, item, items[index]);
+          setAcked((count) => count + 1);
+        } catch (error) {
+          const reason = uploadErrorMessage(error);
+          failUpload(item.client_id, reason);
+          failed.push({ clientId: item.client_id, name: item.file.name, reason });
         }
       }
+      // 하나도 보내지 못했으면 이어 갈 자료가 없습니다. 연결이 끊긴 경우가 많아 멈추고 이유를 보여 줍니다.
+      if (failed.length === targets.length) throw new Error(failed[0]?.reason);
+      return failed;
     },
-    onSuccess: onDone,
+    onSuccess: (failed) => {
+      if (failed.length === 0) onDone();
+      else setSkipped(failed);
+    },
   });
 
   useEffect(() => {
@@ -145,6 +177,23 @@ export function SendStep({ onDone, onCancel }: SendStepProps) {
         <p role="alert" className="text-body text-coral-ink">
           {send.error.message}
         </p>
+      ) : null}
+      {skipped.length > 0 ? (
+        <div role="alert" className="flex flex-col gap-2 rounded-md bg-tint-2 px-4 py-3 text-body">
+          <p className="text-ink">
+            {skipped.length}개는 올리지 못해 빼고 보냈어요. 나머지 자료로 초안을 만들어요.
+          </p>
+          <ul className="list-disc pl-5 text-caption text-ink-muted">
+            {skipped.map((item) => (
+              <li key={item.clientId}>
+                {item.name} — {item.reason}
+              </li>
+            ))}
+          </ul>
+          <Button className="self-start" onClick={onDone}>
+            이어서 초안 만들기
+          </Button>
+        </div>
       ) : null}
     </ProcessingCard>
   );

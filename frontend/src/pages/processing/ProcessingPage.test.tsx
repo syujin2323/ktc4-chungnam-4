@@ -18,6 +18,7 @@ import { isPhoto, useUploadQueue } from "@/features/upload-queue/upload-queue-st
 import { prepareFaceModels } from "@/workers/face/client";
 import { readDb } from "@/mocks/db";
 import { fixtureId } from "@/mocks/fixtures/ids";
+import { MOCK_S3_ORIGIN } from "@/mocks/fixtures/media";
 import { apiPath, errorResponse } from "@/mocks/http";
 import { server } from "@/mocks/server";
 import { renderRoutes } from "@/test/render";
@@ -514,5 +515,110 @@ describe("ProcessingPage", () => {
     expect(router.state.location.pathname).toBe(`/t/today/review/${fixtureId("child", 1)}`);
     expect(router.state.location.search).toBe("?record_date=2026-09-15");
     expect(polled).toHaveBeenCalledTimes(1);
+  });
+
+  // 영상·음성은 브라우저가 형식을 비워 주기도 해서 type을 비워 둡니다.
+  function clip(name: string) {
+    return new NodeFile(["x"], name) as unknown as File;
+  }
+
+  function confirmPhoto(clientId: string) {
+    const queue = useUploadQueue.getState();
+    queue.setClassification(clientId, {
+      model_version: "buffalo_l-1.0",
+      classify_state: "classified",
+      candidates: [{ child_id: fixtureId("child", 1), confidence: 0.9 }],
+      has_unidentified_face: false,
+    });
+    queue.setReview(clientId, {
+      review_state: "확정",
+      assigned_child_ids: [fixtureId("child", 1)],
+      excluded_reason: null,
+      llm_allowed: true,
+    });
+  }
+
+  it("한 파일을 보내지 못하면 그 파일만 빼고 보내고, 이유를 확인한 뒤 초안을 만든다 (#304 4-10)", async () => {
+    const queue = useUploadQueue.getState();
+    queue.setRecordDate("2026-09-15");
+    queue.addFiles([photo("confirmed.jpg"), clip("memo.m4a")]);
+    const [confirmed, memo] = useUploadQueue.getState().items;
+    confirmPhoto(confirmed!.client_id);
+    const jobBodies: unknown[] = [];
+    server.use(
+      // 음성의 S3 PUT만 막고, 사진은 기본 목으로 넘깁니다.
+      http.put(`${MOCK_S3_ORIGIN}/uploads/:clientPhotoId`, ({ params }) =>
+        params.clientPhotoId === memo!.client_id
+          ? new HttpResponse(null, { status: 403 })
+          : undefined,
+      ),
+      http.post(apiPath("/classes/:classId/jobs"), async ({ request }) => {
+        jobBodies.push(await request.clone().json());
+      }),
+      // 폴링을 기다리지 않게 첫 조회에서 끝난 것으로 둡니다.
+      http.get(apiPath("/jobs/:jobId"), ({ params }) =>
+        HttpResponse.json<Job>({
+          job_id: String(params.jobId),
+          class_id: fixtureId("class", 1),
+          record_date: "2026-09-15",
+          status: "succeeded",
+          stage: null,
+          progress: { percent: 100, total_children: 1, finished_children: 1 },
+          failed_stage: null,
+          error_code: null,
+          children: [
+            {
+              child_id: fixtureId("child", 1),
+              status: "succeeded",
+              stage: null,
+              outcome: "drafted",
+              unclassified_reason: null,
+              failed_stage: null,
+              error_code: null,
+              drafts: [{ draft_id: fixtureId("draft", 21), doc_type: "parent_note" }],
+            },
+          ],
+          created_at: "2026-09-15T06:30:00Z",
+          updated_at: "2026-09-15T06:31:40Z",
+        }),
+      ),
+    );
+    const { router } = renderProcessing("/t/today/processing?step=send");
+
+    const notice = await screen.findByRole("alert");
+    expect(notice).toHaveTextContent("1개는 올리지 못해 빼고 보냈어요");
+    expect(notice).toHaveTextContent("memo.m4a");
+    // 교사가 확인하기 전에는 초안 생성으로 넘어가지 않습니다.
+    expect(jobBodies).toEqual([]);
+
+    await userEvent.setup().click(screen.getByRole("button", { name: "이어서 초안 만들기" }));
+
+    await waitFor(
+      () => expect(router.state.location.pathname).toBe(`/t/today/review/${fixtureId("child", 1)}`),
+      { timeout: 3000 },
+    );
+    const sent = Object.values(readDb().media).find(
+      (media) => media.client_photo_id === confirmed!.client_id,
+    );
+    // 뺀 음성은 초안 작업에 넣지 않습니다.
+    expect(jobBodies).toEqual([expect.objectContaining({ media_ids: [sent!.media_id] })]);
+  });
+
+  it("하나도 보내지 못하면 초안 생성으로 넘어가지 않고 이유를 보여 준다 (#304 4-10)", async () => {
+    const queue = useUploadQueue.getState();
+    queue.setRecordDate("2026-09-15");
+    queue.addFiles([photo("confirmed.jpg")]);
+    confirmPhoto(useUploadQueue.getState().items[0]!.client_id);
+    server.use(
+      http.put(
+        `${MOCK_S3_ORIGIN}/uploads/:clientPhotoId`,
+        () => new HttpResponse(null, { status: 403 }),
+      ),
+    );
+    const { router } = renderProcessing("/t/today/processing?step=send");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("요청을 처리하지 못했어요");
+    expect(screen.queryByRole("button", { name: "이어서 초안 만들기" })).not.toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/t/today/processing");
   });
 });
